@@ -3,6 +3,7 @@ on:
     inputs:
       force:
         required: false
+        type: boolean
         default: false
   schedule:
     - cron: "46 0 * * 1"
@@ -13,7 +14,7 @@ jobs:
     outputs:
       result: ${{ steps.compare-commits.outputs.result }}
 
-    steps:
+    steps:        
       - uses: actions/github-script@v3.1.0
         id: compare-commits
         with:
