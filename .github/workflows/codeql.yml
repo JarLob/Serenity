@@ -35,7 +35,6 @@ jobs:
   sync:
     needs: [compare, analyze]
     runs-on: ubuntu-latest
-    if: ${{ !(github.event.inputs.ref) }}
 
     steps:
     - uses: actions/checkout@v2
