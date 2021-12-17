@@ -5,6 +5,10 @@ on:
         required: false
         type: boolean
         default: false
+      ref:
+        required: false
+        type: string
+        default: ""
   schedule:
     - cron: "46 0 * * 1"
 
@@ -22,15 +26,16 @@ jobs:
             const ret = await github.repos.compareCommits({
               owner: "JarLob",
               repo: "serenity",
-              base: "serenity-is:master",
+              base: `serenity-is:${ "${{ github.event.inputs.ref }}" ? "${{ github.event.inputs.ref }}" : "master" }`,
               head: "JarLob:master",
             });
-
+            
             return { behind_by: ret.data.behind_by, sha: ret.data.base_commit.sha };
             
   sync:
     needs: [compare, analyze]
     runs-on: ubuntu-latest
+    if: ${{ !(github.event.inputs.ref) }}
 
     steps:
     - uses: actions/checkout@v2
@@ -63,6 +68,7 @@ jobs:
       with:
         fetch-depth: 20
         persist-credentials: false
+        ref: ${{ github.event.inputs.ref }}
         
     - run: |
         git remote add upstream git://github.com/serenity-is/serenity.git
