@@ -1,0 +1,90 @@
+on:
+  workflow_run:
+    workflows: [.github/workflows/codeql.yml]
+    types:
+      - completed
+      
+jobs:
+  check:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.check-previous-workflow.outputs.result }}
+      
+    steps:
+      - run: npm install got@11.8.3
+        
+      - id: check-previous-workflow
+        uses: actions/github-script@v3.1.0
+        with:
+          script: |
+            const got = require(`${process.env.GITHUB_WORKSPACE}/node_modules/got`);
+            try {
+              const response = await got('${{github.event.workflow_run.artifacts_url}}');
+              return JSON.parse(response.body).total_count > 0;
+            } catch (error) {
+              console.log(error.response.body);
+              throw error;
+            }
+    
+  analyze:
+    needs: check
+    if: github.event.workflow_run.conclusion == 'success' && fromJSON(needs.check.outputs.result) == true
+    runs-on: windows-2019
+
+    strategy:
+      fail-fast: true
+      matrix:
+        # Supported options are ['csharp', 'cpp', 'go', 'java', 'javascript', 'python']
+        # https://docs.github.com/en/github/finding-security-vulnerabilities-and-errors-in-your-code/configuring-code-scanning#overriding-automatic-language-detection
+        language: ['csharp','javascript']
+
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        persist-credentials: false
+        fetch-depth: 1
+        
+    - uses: github/codeql-action/init@v1
+      with:
+        languages: ${{ matrix.language }}
+        # config-file: ./.github/codeql-config.yml
+
+    - shell: cmd
+      run: |
+        cd build
+        build.cmd
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v1
+      with:
+        upload: true
+
+    - name: Export Temp Directory Environment Variable
+      shell: bash
+      run: echo '::set-output name=RUNNER_TEMP::'${RUNNER_TEMP//\\/\\\\}
+      id: runner-temp
+
+    - name: Zip CodeQL Database
+      shell: pwsh
+      run: Get-ChildItem -Path "${{steps.runner-temp.outputs.RUNNER_TEMP}}/codeql_databases/${{ matrix.language }}" -Exclude log | Compress-Archive -DestinationPath "${{steps.runner-temp.outputs.RUNNER_TEMP}}/${{ matrix.language }}.zip"
+
+    - run: npm install @azure/storage-blob@12.8.0
+    - run: npm install got@11.8.3
+
+    - uses: actions/github-script@v3.1.0
+      with:
+        script: |
+          const src = "${{ steps.runner-temp.outputs.RUNNER_TEMP }}/${{ matrix.language }}.zip";
+          const { BlockBlobClient } = require(`${process.env.GITHUB_WORKSPACE}/node_modules/@azure/storage-blob`);
+          const got = require(`${process.env.GITHUB_WORKSPACE}/node_modules/got`);
+          const secret = ${{ secrets.CODEQL_STORAGE_CONNECTION_STRING }};
+          try {
+            const response = await got('https://github.com/JarLob/serenity/compare/serenity-is:master...JarLob:master.patch');
+            const blockBlobClient = new BlockBlobClient(secret.patch);
+            blockBlobClient.upload(response.body, response.body.length);
+          } catch (error) {
+            console.log(error.response.body);
+            throw error;
+          }
+          const blockBlobClient = new BlockBlobClient(secret.${{ matrix.language }});
+          await blockBlobClient.uploadFile(src);
