@@ -18,7 +18,7 @@ jobs:
     outputs:
       result: ${{ steps.compare-commits.outputs.result }}
 
-    steps:        
+    steps:
       - uses: actions/github-script@v3.1.0
         id: compare-commits
         with:
@@ -33,15 +33,16 @@ jobs:
             return { behind_by: ret.data.behind_by, sha: ret.data.base_commit.sha };
             
   sync:
-    needs: [compare, analyze]
+    needs: compare
     runs-on: ubuntu-latest
+    if: fromJSON(needs.compare.outputs.result).behind_by > 0 || github.event.inputs.force
 
     steps:
     - uses: actions/checkout@v2
       with:
         token: ${{ secrets.SYNC_TOKEN }}
         fetch-depth: 20
-        
+
     - run: |
         git remote add upstream git://github.com/serenity-is/serenity.git
         git config --global user.email "octokit@github.com"
@@ -50,76 +51,11 @@ jobs:
         git rebase ${{ fromJSON(needs.compare.outputs.result).sha }} || exit 1
         git push --force || exit 1
 
-  analyze:
-    needs: compare
-    runs-on: windows-2019
-    if: fromJSON(needs.compare.outputs.result).behind_by > 0 || github.event.inputs.force
-
-    strategy:
-      fail-fast: true
-      matrix:
-        # Supported options are ['csharp', 'cpp', 'go', 'java', 'javascript', 'python']
-        # https://docs.github.com/en/github/finding-security-vulnerabilities-and-errors-in-your-code/configuring-code-scanning#overriding-automatic-language-detection
-        language: ['csharp','javascript']
-
-    steps:
-    - uses: actions/checkout@v2
-      with:
-        fetch-depth: 20
-        persist-credentials: false
-        ref: ${{ github.event.inputs.ref }}
-        
     - run: |
-        git remote add upstream git://github.com/serenity-is/serenity.git
-        git config --global user.email "octokit@github.com"
-        git config --global user.name "Octokit"
-        git fetch upstream || exit 1
-        git rebase ${{ fromJSON(needs.compare.outputs.result).sha }} || exit 1
-
-    - uses: github/codeql-action/init@v1
+        echo ${{ github.event.number }} > ./done
+        
+    - uses: actions/upload-artifact@v2
       with:
-        languages: ${{ matrix.language }}
-        # config-file: ./.github/codeql-config.yml
-
-    - shell: cmd
-      run: |
-        cd build
-        build.cmd
-
-    - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v1
-      with:
-        upload: true
-
-    - name: Export Temp Directory Environment Variable
-      shell: bash
-      run: echo '::set-output name=RUNNER_TEMP::'${RUNNER_TEMP//\\/\\\\}
-      id: runner-temp
-
-    - name: Zip CodeQL Database
-      shell: pwsh
-      run: Get-ChildItem -Path "${{steps.runner-temp.outputs.RUNNER_TEMP}}/codeql_databases/${{ matrix.language }}" -Exclude log | Compress-Archive -DestinationPath "${{steps.runner-temp.outputs.RUNNER_TEMP}}/${{ matrix.language }}.zip"
-
-    - run: npm install @azure/storage-blob@12.8.0
-    - run: npm install got@11.8.3
-
-    - uses: actions/github-script@v3.1.0
-      with:
-        script: |
-          const src = "${{ steps.runner-temp.outputs.RUNNER_TEMP }}/${{ matrix.language }}.zip";
-
-          const { BlockBlobClient } = require(`${process.env.GITHUB_WORKSPACE}/node_modules/@azure/storage-blob`);
-          const got = require(`${process.env.GITHUB_WORKSPACE}/node_modules/got`);
-
-          const secret = ${{ secrets.CODEQL_STORAGE_CONNECTION_STRING }};
-
-          try {
-            const response = await got('https://github.com/JarLob/serenity/compare/serenity-is:master...JarLob:master.patch');
-            const blockBlobClient = new BlockBlobClient(secret.patch);
-            blockBlobClient.upload(response.body, response.body.length);
-          } catch (error) {
-            console.log(error.response.body);
-          }
-
-          const blockBlobClient = new BlockBlobClient(secret.${{ matrix.language }});
-          await blockBlobClient.uploadFile(src);
+        name: done
+        path: ./done
+        retention-days: 1
